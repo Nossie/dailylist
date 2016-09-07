@@ -1,0 +1,143 @@
+#!/bin/bash
+#
+#Koerslijst Monthly and Daily auto run
+#
+#Copyright 2016, Paul Tierlier <nossie@nossie.com>
+#Version 1.5
+
+
+
+#########################
+#########################
+#####               #####
+#####   VARIABLES   #####
+#####               #####
+#########################
+#########################
+
+DATUM=$(date +"%y%m%d")
+DATUM2=$(date +"%d-%m-%Y")
+DATUM3=$(date +"%y%m%d" --date="yesterday")
+DATUM4=$(date +"%B")
+DATUM_FIXED=$(date +"%Y%m%d")
+DATUM_FIXED_OLD=$(date +"%Y%m%d" --date="last month")
+YEAR=$(date +"%Y")
+#echo "DEBUG: current i=$i" >&2
+
+
+
+##########################
+##########################
+#####                #####
+#####  FETCH & MOVE  #####
+#####                #####
+##########################
+##########################
+
+#Fetch the new koerslijst email.
+fetchmail -k
+#copy the attachement to the correct folder
+cp -rp /home/koerslijst/koerslijst_attachments/EL$DATUM.DATA /data/aab-valuta/importer/koerslijsten/
+cp -rp /home/koerslijst/koerslijst_attachments/Valuta$DATUM /data/aab-valuta/importer/koerslijsten/Valuta$DATUM_FIXED
+MONTHLY_PRESENT="/data/aab-valuta/importer/koerslijsten/Valuta$DATUM_FIXED" 
+
+##########################
+##########################
+#####                #####
+#####     DAILY      #####
+#####                #####
+##########################
+##########################
+
+DO_DAILY ()
+{
+
+echo "Starting script $DATUM2" >> /home/a-admin/scripts/LOG
+ATTACHMENT_DAILY=`basename /data/aab-valuta/importer/koerslijsten/EL$DATUM.DATA`
+KOERSLIJST_DAILY_ISSUE="KOERSLIJST OF $DATUM2 HAS AN ISSUE!!"
+KOERSLIJST_DAILY_DONE="KOERSLIJST VAN $DATUM2 IS DONE \n\n\n Please update the Operational Activities (this week)!!!"  
+
+#lets move the koerslijst 
+mv /data/aab-valuta/importer/koerslijsten/EL$DATUM3.DATA /data/aab-valuta/importer/koerslijsten/$YEAR/
+
+#check for date in attachement
+if [ $ATTACHMENT_DAILY = EL$DATUM.DATA ]; then
+#run import script
+/bin/sh /data/aab-valuta/importer/run_daily_import_valuta.sh /data/aab-valuta/importer/koerslijsten/$ATTACHMENT_DAILY
+echo "/bin/sh /data/aab-valuta/importer/run_daily_import_valuta.sh /data/aab-valuta/importer/koerslijsten/$ATTACHMENT_DAILY" >> /home/a-admin/scripts/LOG
+sleep 240
+#check if mail is being send
+CHECK_DAILY_LOG=`tail -50 /var/log/aab/valuta/picostrategy/picostrategy.trace|grep -c "Processing report"`
+if  [ $CHECK_DAILY_LOG -ge 1 ]; then
+#stay in loop till we are done
+/bin/grep -m 1 "Finished generating a batch of scheduled reports." <(tail -f  /var/log/aab/valuta/picostrategy/picostrategy.trace)
+#mail to infra met attach
+echo -e $KOERSLIJST_DAILY_DONE | /usr/bin/mail -s "FW: $ATTACHMENT_DAILY File. = Done" -a "From:noreply@bit-libre.com (Koerslijst Importer)" infrastructure@bit-libre.com
+#ticket topdesk?
+#API call
+else
+echo $KOERSLIJST_DAILY_ISSUE | /usr/bin/mail -s "KOERSLIJST HAS AN ISSUE!" -a "From:noreply@bit-libre.com (Koerslijst Importer)" infrastructure@bit-libre.com
+fi
+fi
+}
+
+##########################
+##########################
+#####                #####
+#####     MONTHLY    #####
+#####                #####
+##########################
+##########################
+
+DO_MONTHLY () 
+{
+echo "Starting script $DATUM4" >> /home/a-admin/scripts/LOG
+ATTACHMENT_MONTHLY=`basename /data/aab-valuta/importer/koerslijsten/Valuta$DATUM_FIXED`
+KOERSLIJST_MONTHLY_ISSUE="KOERSLIJST MONTH $DATUM4 HAS AN ISSUE!!"
+KOERSLIJST_MONTHLY_DONE="KOERSLIJST MONTH $DATUM2 IS DONE"  
+
+#lets move the koerslijst from the previous month.
+mv /data/aab-valuta/importer/koerslijsten/Valuta$DATUM_FIXED_OLD /data/aab-valuta/importer/koerslijsten/$YEAR/
+
+#check for date in attachement
+if [ $ATTACHMENT_MONTHLY = Valuta$DATUM_FIXED ]; then
+#run import script
+/bin/sh /data/aab-valuta/importer/run_monthly_import.sh /data/aab-valuta/importer/koerslijsten/$ATTACHMENT_MONTHLY
+echo "/bin/sh /data/aab-valuta/importer/run_monthly_import.sh /data/aab-valuta/importer/koerslijsten/$ATTACHMENT_MONTHLY" >> /home/a-admin/scripts/LOG
+#wait 15 seconds 
+sleep 120
+CHECK_MONTHLY_LOG=`tail -10 /var/log/aab/valuta/picostrategy/picostrategy.trace|grep -c "Processing report"`
+#check if mail is being send
+if  [ $CHECK_MONTHLY_LOG -ge 1 ]; then
+#stay in loop till we are done
+/bin/grep -m 1 "Finished generating a batch of scheduled reports." <\(tail -f /var/log/aab/valuta/picostrategy/picostrategy.trace\)
+#mail to infra met attach
+echo $KOERSLIJST_MONTHLY_DONE | /usr/bin/mail -s "FW: $ATTACHMENT File. (MONTH) = Done" -a "From:noreply@bit-libre.com (Koerslijst Importer)" $ATTACHMENT infrastructure@bit
+-libre.com
+echo $KOERSLIJST_MONTHLY_DONE >> /home/a-admin/scripts/LOG
+echo "" >> /home/a-admin/scripts/LOG
+echo "Starting daily run" >> /home/a-admin/scripts/LOG
+sleep 120
+DO_DAILY
+#ticket topdesk?
+#API call
+else
+echo $KOERSLIJST_MONTHLY_ISSUE | /usr/bin/mail -s "KOERSLIJST (MONTH) HAS AN ISSUE!" -a "From:noreply@bit-libre.com (Koerslijst Importer)" $ATTACHMENT_MONTHLY infrastructur
+e@bit-libre.com 
+fi
+fi
+}
+
+##########################
+##########################
+#####                #####
+#####   ACTUAL RUN   #####
+#####                #####
+##########################
+##########################
+
+if [[ -f $MONTHLY_PRESENT ]]; then
+DO_MONTHLY
+else
+DO_DAILY
+fi
